@@ -33,9 +33,10 @@ describe('TaskLifecycleSliceAction', () => {
     it('should optimistically set status to running and call service', async () => {
       vi.mocked(taskService.run).mockResolvedValue({ success: true } as any);
 
-      await useTaskStore.getState().runTask('T-1');
+      const result = await useTaskStore.getState().runTask('T-1');
 
       expect(taskService.run).toHaveBeenCalledWith('T-1', undefined);
+      expect(result).toEqual({ success: true });
     });
 
     it('should pass prompt and continueTopicId', async () => {
@@ -58,17 +59,40 @@ describe('TaskLifecycleSliceAction', () => {
 
       await useTaskStore.getState().runTask('T-1');
 
-      expect(mutate).toHaveBeenCalledWith(['fetchTaskDetail', 'T-1']);
+      expect(mutate).toHaveBeenCalledWith(['task:detail', 'T-1']);
+    });
+
+    it('should surface the run failure when the caller requires it', async () => {
+      vi.mocked(taskService.run).mockRejectedValue(new Error('fail'));
+
+      await expect(
+        useTaskStore.getState().runTask('T-1', undefined, { throwOnError: true }),
+      ).rejects.toThrow('fail');
+    });
+
+    it('should preserve a successful run result when cache refreshes fail', async () => {
+      const { mutate } = await import('@/libs/swr');
+      vi.mocked(taskService.run).mockResolvedValue({ topicId: 'tpc-1' } as any);
+      vi.mocked(mutate)
+        .mockRejectedValueOnce(new Error('detail refresh failed'))
+        .mockRejectedValueOnce(new Error('list refresh failed'))
+        .mockRejectedValueOnce(new Error('group refresh failed'));
+
+      const result = await useTaskStore
+        .getState()
+        .runTask('T-1', undefined, { throwOnError: true });
+
+      expect(result).toEqual({ topicId: 'tpc-1' });
     });
   });
 
-  describe('pauseTask', () => {
+  describe('updateTaskStatus', () => {
     it('should call updateStatus with paused', async () => {
       vi.mocked(taskService.updateStatus).mockResolvedValue({ success: true } as any);
 
-      await useTaskStore.getState().pauseTask('T-1');
+      await useTaskStore.getState().updateTaskStatus('T-1', 'paused');
 
-      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'paused');
+      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'paused', undefined);
     });
 
     it('should optimistically set status', async () => {
@@ -77,37 +101,31 @@ describe('TaskLifecycleSliceAction', () => {
         return { success: true } as any;
       });
 
-      await useTaskStore.getState().pauseTask('T-1');
+      await useTaskStore.getState().updateTaskStatus('T-1', 'paused');
     });
-  });
 
-  describe('cancelTask', () => {
     it('should call updateStatus with canceled', async () => {
       vi.mocked(taskService.updateStatus).mockResolvedValue({ success: true } as any);
 
-      await useTaskStore.getState().cancelTask('T-1');
+      await useTaskStore.getState().updateTaskStatus('T-1', 'canceled');
 
-      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'canceled');
+      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'canceled', undefined);
     });
-  });
 
-  describe('resumeTask', () => {
     it('should call updateStatus with backlog', async () => {
       vi.mocked(taskService.updateStatus).mockResolvedValue({ success: true } as any);
 
-      await useTaskStore.getState().resumeTask('T-1');
+      await useTaskStore.getState().updateTaskStatus('T-1', 'backlog');
 
-      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'backlog');
+      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'backlog', undefined);
     });
-  });
 
-  describe('completeTask', () => {
     it('should call updateStatus with completed', async () => {
       vi.mocked(taskService.updateStatus).mockResolvedValue({ success: true } as any);
 
-      await useTaskStore.getState().completeTask('T-1');
+      await useTaskStore.getState().updateTaskStatus('T-1', 'completed');
 
-      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'completed');
+      expect(taskService.updateStatus).toHaveBeenCalledWith('T-1', 'completed', undefined);
     });
   });
 
@@ -119,7 +137,7 @@ describe('TaskLifecycleSliceAction', () => {
       await useTaskStore.getState().cancelTopic('tpc_1');
 
       expect(taskService.cancelTopic).toHaveBeenCalledWith('tpc_1');
-      expect(mutate).toHaveBeenCalledWith(['fetchTaskDetail', 'T-1']);
+      expect(mutate).toHaveBeenCalledWith(['task:detail', 'T-1']);
     });
 
     it('should not refresh if no activeTaskId', async () => {
@@ -142,7 +160,7 @@ describe('TaskLifecycleSliceAction', () => {
       await useTaskStore.getState().deleteTopic('tpc_1');
 
       expect(taskService.deleteTopic).toHaveBeenCalledWith('tpc_1');
-      expect(mutate).toHaveBeenCalledWith(['fetchTaskDetail', 'T-1']);
+      expect(mutate).toHaveBeenCalledWith(['task:detail', 'T-1']);
     });
   });
 });

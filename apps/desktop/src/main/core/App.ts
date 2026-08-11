@@ -1,39 +1,41 @@
 import os from 'node:os';
-import { join } from 'node:path';
+import path from 'node:path';
 
 import type { ElectronIPCEventHandler } from '@lobechat/electron-server-ipc';
 import { ElectronIPCServer } from '@lobechat/electron-server-ipc';
 import { app, nativeTheme, protocol } from 'electron';
-import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
-import { macOS, windows } from 'electron-is';
+import * as electronIs from 'electron-is';
 
 import { name } from '@/../../package.json';
 import { binDir, buildDir } from '@/const/dir';
 import { isDev } from '@/const/env';
-import { ELECTRON_BE_PROTOCOL_SCHEME } from '@/const/protocol';
 import type { IControlModule } from '@/controllers';
 import AuthCtr from '@/controllers/AuthCtr';
-import { generateCliWrapper, getCliWrapperDir } from '@/modules/cliEmbedding';
 import {
-  astSearchDetectors,
-  browserAutomationDetectors,
-  contentSearchDetectors,
-  fileSearchDetectors,
-  type IToolDetector,
-  runtimeEnvironmentDetectors,
-  type ToolCategory,
-} from '@/modules/toolDetectors';
-import type { IServiceModule } from '@/services';
+  astSearchBinaries,
+  type BinaryCategory,
+  type BinarySpec,
+  browserAutomationBinaries,
+  cliAgentBinaries,
+  contentSearchBinaries,
+  fileSearchBinaries,
+  runtimeEnvironmentBinaries,
+} from '@/modules/binaries';
+import { generateCliWrapper, getCliWrapperDir } from '@/modules/cliEmbedding';
+import { ScreenCaptureManager } from '@/modules/screenCapture/ScreenCaptureManager';
+import type { IServiceModule, ServiceLifecycle, ServiceModule } from '@/services';
 import { createLogger } from '@/utils/logger';
 
 import { BrowserManager } from './browser/BrowserManager';
+import { backendProxyProtocolManager } from './infrastructure/BackendProxyProtocolManager';
+import { BinaryManager } from './infrastructure/BinaryManager';
 import { I18nManager } from './infrastructure/I18nManager';
 import { IoCContainer } from './infrastructure/IoCContainer';
+import { LocalFileProtocolManager } from './infrastructure/LocalFileProtocolManager';
 import { ProtocolManager } from './infrastructure/ProtocolManager';
 import { RendererUrlManager } from './infrastructure/RendererUrlManager';
 import { StaticFileServerManager } from './infrastructure/StaticFileServerManager';
 import { StoreManager } from './infrastructure/StoreManager';
-import { ToolDetectorManager } from './infrastructure/ToolDetectorManager';
 import { UpdaterManager } from './infrastructure/UpdaterManager';
 import { MenuManager } from './ui/MenuManager';
 import { ShortcutManager } from './ui/ShortcutManager';
@@ -60,7 +62,9 @@ export class App {
   staticFileServerManager: StaticFileServerManager;
   protocolManager: ProtocolManager;
   rendererUrlManager: RendererUrlManager;
-  toolDetectorManager: ToolDetectorManager;
+  localFileProtocolManager: LocalFileProtocolManager;
+  binaryManager: BinaryManager;
+  screenCaptureManager: ScreenCaptureManager;
   chromeFlags: string[] = ['OverlayScrollbar', 'FluentOverlayScrollbar', 'FluentScrollbar'];
 
   /**
@@ -86,31 +90,34 @@ export class App {
     logger.info(` RAM: ${Math.round(os.totalmem() / 1024 / 1024 / 1024)} GB`);
     logger.info(`PATH: ${app.getAppPath()}`);
     logger.info(` lng: ${app.getLocale()}`);
-    logger.info(` bin: ${binDir}`);
+    logger.info(` res: ${binDir}`);
     logger.info('----------------------------------------------');
     logger.info('Starting LobeHub...');
 
-    // Append bundled binaries and CLI wrapper directories to PATH for tool resolution
+    // Append the CLI wrapper directory to PATH so spawned shells can resolve
+    // `lobehub` / `lh` / `lobe`. Managed binary dirs (e.g. agent-browser) are
+    // augmented separately by `binaryManager.augmentPath()` during bootstrap.
     const pathSep = process.platform === 'win32' ? ';' : ':';
-    process.env.PATH = `${process.env.PATH}${pathSep}${binDir}${pathSep}${getCliWrapperDir()}`;
+    process.env.PATH = `${process.env.PATH}${pathSep}${getCliWrapperDir()}`;
 
     logger.debug('Initializing App');
     // Initialize store manager
     this.storeManager = new StoreManager(this);
 
     this.rendererUrlManager = new RendererUrlManager();
+    // Wire the backend reverse-proxy as an `app://` interceptor: keeps
+    // RendererUrlManager ignorant of "what counts as a backend path" while
+    // letting BackendProxyProtocolManager own that knowledge.
+    this.rendererUrlManager.addRequestInterceptor(
+      backendProxyProtocolManager.createAppRequestInterceptor(),
+    );
+    this.localFileProtocolManager = new LocalFileProtocolManager();
+    void this.localFileProtocolManager.approveWorkspaceRoots(
+      this.storeManager.get('localFileWorkspaceRoots', []),
+    );
     protocol.registerSchemesAsPrivileged([
-      {
-        privileges: {
-          allowServiceWorkers: true,
-          corsEnabled: true,
-          secure: true,
-          standard: true,
-          supportFetchAPI: true,
-        },
-        scheme: ELECTRON_BE_PROTOCOL_SCHEME,
-      },
       this.rendererUrlManager.protocolScheme,
+      this.localFileProtocolManager.protocolScheme,
     ]);
 
     // load controllers
@@ -139,14 +146,19 @@ export class App {
     this.trayManager = new TrayManager(this);
     this.staticFileServerManager = new StaticFileServerManager(this);
     this.protocolManager = new ProtocolManager(this);
-    this.toolDetectorManager = new ToolDetectorManager(this);
+    this.binaryManager = new BinaryManager(this);
+    this.screenCaptureManager = new ScreenCaptureManager(this);
 
-    // Register built-in tool detectors
-    this.registerBuiltinToolDetectors();
+    // Register built-in binary specs
+    this.registerBuiltinBinarySpecs();
 
     // Configure renderer loading strategy (dev server vs static export)
     // should register before app ready
     this.rendererUrlManager.configureRendererLoader();
+
+    // Serves arbitrary local files (e.g. project file previews) via
+    // `localfile://` to the renderer. Active in both dev and prod.
+    this.localFileProtocolManager.registerHandler();
 
     // initialize protocol handlers
     this.protocolManager.initialize();
@@ -183,30 +195,29 @@ export class App {
   }
 
   /**
-   * Register built-in tool detectors for content search and file search
+   * Register built-in binary specs the BinaryManager knows about.
    */
-  private registerBuiltinToolDetectors() {
-    logger.debug('Registering built-in tool detectors');
+  private registerBuiltinBinarySpecs() {
+    logger.debug('Registering built-in binary specs');
 
-    const detectorCategories: Partial<Record<ToolCategory, IToolDetector[]>> = {
-      'runtime-environment': runtimeEnvironmentDetectors,
-      'ast-search': astSearchDetectors,
-      'browser-automation': browserAutomationDetectors,
-      'content-search': contentSearchDetectors,
-      'file-search': fileSearchDetectors,
+    const binaryCategories: Partial<Record<BinaryCategory, BinarySpec[]>> = {
+      'runtime-environment': runtimeEnvironmentBinaries,
+      'cli-agents': cliAgentBinaries,
+      'ast-search': astSearchBinaries,
+      'browser-automation': browserAutomationBinaries,
+      'content-search': contentSearchBinaries,
+      'file-search': fileSearchBinaries,
     };
 
-    for (const [category, detectors] of Object.entries(detectorCategories)) {
-      if (detectors) {
-        for (const detector of detectors) {
-          this.toolDetectorManager.register(detector, category as ToolCategory);
+    for (const [category, specs] of Object.entries(binaryCategories)) {
+      if (specs) {
+        for (const spec of specs) {
+          this.binaryManager.register(spec, category as BinaryCategory);
         }
       }
     }
 
-    logger.info(
-      `Registered ${this.toolDetectorManager.getRegisteredTools().length} tool detectors`,
-    );
+    logger.info(`Registered ${this.binaryManager.getRegistered().length} binary specs`);
   }
 
   bootstrap = async () => {
@@ -232,6 +243,20 @@ export class App {
       logger.warn('Failed to generate CLI wrapper:', error);
     });
 
+    // Surface previously-installed managed binaries on PATH so spawned shells
+    // (and child agents) can resolve them without going through the manager.
+    this.binaryManager.augmentPath().catch((error) => {
+      logger.warn('Failed to augment PATH with managed binaries:', error);
+    });
+
+    // Lazy-install agent-browser in the background — keeps the installer
+    // light (no bundled binary) while still making the CLI available shortly
+    // after first launch. Errors are non-fatal; the Settings panel exposes a
+    // manual retry via `binaryService.detect / ensure` later.
+    this.binaryManager.ensure('agent-browser').catch((error) => {
+      logger.warn('[agent-browser] background ensure failed:', error);
+    });
+
     // Initialize i18n. Note: app.getLocale() must be called after app.whenReady() to get the correct value
     await this.i18n.init();
     this.menuManager.initialize();
@@ -244,10 +269,8 @@ export class App {
 
     await this.browserManager.initializeBrowsers();
 
-    // Initialize tray manager
-    if (process.platform === 'win32') {
-      this.trayManager.initializeTrays();
-    }
+    // Initialize tray manager on all platforms (macOS menu bar, Windows / Linux tray).
+    this.trayManager.initializeTrays();
 
     // Initialize updater manager
     await this.updaterManager.initialize();
@@ -256,7 +279,7 @@ export class App {
     this.isQuiting = false;
 
     app.on('window-all-closed', () => {
-      if (windows() || process.platform === 'linux') {
+      if (electronIs.windows() || process.platform === 'linux') {
         logger.info(`All windows closed, quitting application (${process.platform})`);
         app.quit();
       }
@@ -271,7 +294,7 @@ export class App {
   };
 
   getService<T>(serviceClass: Class<T>): T {
-    return this.services.get(serviceClass);
+    return this.services.get(serviceClass) as T;
   }
 
   getController<T>(controllerClass: Class<T>): T {
@@ -343,8 +366,6 @@ export class App {
     await app.whenReady();
     logger.debug('Application ready');
 
-    await this.installReactDevtools();
-
     this.controllers.forEach((controller) => {
       if (typeof controller.afterAppReady === 'function') {
         try {
@@ -355,22 +376,9 @@ export class App {
         }
       }
     });
+    this.screenCaptureManager.prewarmPermissionCheck();
+
     logger.info('Application ready state completed');
-  };
-
-  /**
-   * Development only: install React DevTools extension into Electron's devtools.
-   */
-  private installReactDevtools = async () => {
-    if (!isDev) return;
-
-    try {
-      const name = await installExtension(REACT_DEVELOPER_TOOLS);
-
-      logger.info(`Installed DevTools extension: ${name}`);
-    } catch (error) {
-      logger.warn('Failed to install React DevTools extension', error);
-    }
   };
 
   // ============= helper ============= //
@@ -382,7 +390,7 @@ export class App {
   /**
    * all services in app
    */
-  private services = new Map<Class<any>, any>();
+  private services = new Map<Class<any>, ServiceModule & ServiceLifecycle>();
 
   private ipcServer: ElectronIPCServer;
   private ipcServerEventMap: IPCEventMap = new Map();
@@ -417,9 +425,8 @@ export class App {
     if (!isDev) return;
 
     logger.debug('Setting up dev branding');
-    app.setName('lobehub-desktop-dev');
-    if (macOS()) {
-      app.dock!.setIcon(join(buildDir, 'icon-dev.png'));
+    if (electronIs.macOS()) {
+      app.dock!.setIcon(path.join(buildDir, 'icon-dev.png'));
     }
   };
 
@@ -446,7 +453,11 @@ export class App {
       };
     });
 
-    this.ipcServer = new ElectronIPCServer(name, ipcServerEvents);
+    // Socket path is derived from this id (`${id}-electron-ipc.sock`). Keep the
+    // package name by default; override with LOBE_IPC_ID so concurrent dev
+    // instances get distinct sockets instead of the last one hijacking the path.
+    const ipcId = process.env.LOBE_IPC_ID || name;
+    this.ipcServer = new ElectronIPCServer(ipcId, ipcServerEvents);
   }
 
   // Add before-quit handler function
@@ -460,6 +471,10 @@ export class App {
     }
 
     // Execute cleanup operations
+    for (const service of this.services.values()) {
+      service.destroy?.();
+    }
+
     this.staticFileServerManager.destroy();
   };
 }

@@ -1,22 +1,15 @@
-import { type ChatToolPayloadWithResult } from '@lobechat/types';
+import {
+  formatBrowserMcpShortLabel,
+  formatLinearMcpShortLabel,
+} from '@lobechat/builtin-tool-claude-code/client/labels';
+import type { ChatToolPayloadWithResult } from '@lobechat/types';
 import { t } from 'i18next';
 
 import { LOADING_FLAT } from '@/const/message';
-import { type AssistantContentBlock } from '@/types/index';
+import type { AssistantContentBlock } from '@/types/index';
 
 import {
   DURATION_SECONDS_PER_MINUTE,
-  POST_TOOL_ANSWER_DOUBLE_NEWLINE_SCORE,
-  POST_TOOL_ANSWER_LENGTH_LONG_MIN_CHARS,
-  POST_TOOL_ANSWER_LENGTH_LONG_SCORE,
-  POST_TOOL_ANSWER_LENGTH_MEDIUM_MIN_CHARS,
-  POST_TOOL_ANSWER_MARKDOWN_STRUCTURE_SCORE,
-  POST_TOOL_ANSWER_MEDIUM_TEXT_SCORE,
-  POST_TOOL_ANSWER_MULTI_LINE_MIN_COUNT,
-  POST_TOOL_ANSWER_MULTI_LINE_SCORE,
-  POST_TOOL_ANSWER_PUNCT_MIN_COUNT,
-  POST_TOOL_ANSWER_PUNCT_SCORE,
-  POST_TOOL_FINAL_ANSWER_SCORE_THRESHOLD,
   TIME_MS_PER_SECOND,
   TOOL_API_DISPLAY_NAMES,
   TOOL_FIRST_DETAIL_MAX_CHARS,
@@ -37,57 +30,6 @@ export const areWorkflowToolsComplete = (tools: ChatToolPayloadWithResult[]): bo
   return collapsible.every((t) => t.result != null && t.result.content !== LOADING_FLAT);
 };
 
-/** Heuristic: prose-only block after last tool looks like a long deliverable (not a one-line step). */
-export const scorePostToolBlockAsFinalAnswer = (block: AssistantContentBlock): number => {
-  if (block.tools && block.tools.length > 0) return 0;
-  const raw = (block.content ?? '').trim();
-  if (!raw || raw === LOADING_FLAT) return 0;
-
-  let score = 0;
-  const compact = raw.replaceAll(/\s+/g, ' ');
-  if (compact.length >= POST_TOOL_ANSWER_LENGTH_LONG_MIN_CHARS)
-    score += POST_TOOL_ANSWER_LENGTH_LONG_SCORE;
-  else if (compact.length >= POST_TOOL_ANSWER_LENGTH_MEDIUM_MIN_CHARS)
-    score += POST_TOOL_ANSWER_MEDIUM_TEXT_SCORE;
-
-  if (raw.includes('\n\n')) score += POST_TOOL_ANSWER_DOUBLE_NEWLINE_SCORE;
-  else if (raw.split('\n').filter((l) => l.trim()).length >= POST_TOOL_ANSWER_MULTI_LINE_MIN_COUNT)
-    score += POST_TOOL_ANSWER_MULTI_LINE_SCORE;
-
-  if (
-    new RegExp(`^#{1,${WORKFLOW_MARKDOWN_HEADING_MAX_LEVEL}}\\s`, 'm').test(raw) ||
-    /^\s*[-*]\s+\S/m.test(raw)
-  )
-    score += POST_TOOL_ANSWER_MARKDOWN_STRUCTURE_SCORE;
-
-  const punctCount = (compact.match(/[。！？.!?]/g) ?? []).length;
-  if (punctCount >= POST_TOOL_ANSWER_PUNCT_MIN_COUNT) score += POST_TOOL_ANSWER_PUNCT_SCORE;
-
-  return score;
-};
-
-/**
- * While generating, first index at or after {@param lastToolIndex} whose prose-only block scores
- * as final-answer-like. Tail from here stays out of the workflow fold. Returns null if tooling
- * reappears or nothing qualifies.
- */
-export const getPostToolAnswerSplitIndex = (
-  blocks: AssistantContentBlock[],
-  lastToolIndex: number,
-  toolsPhaseComplete: boolean,
-  isGenerating: boolean,
-): number | null => {
-  if (!isGenerating || !toolsPhaseComplete || lastToolIndex < 0) return null;
-  if (lastToolIndex >= blocks.length - 1) return null;
-
-  for (let i = lastToolIndex + 1; i < blocks.length; i++) {
-    const b = blocks[i]!;
-    if (b.tools && b.tools.length > 0) return null;
-    if (scorePostToolBlockAsFinalAnswer(b) >= POST_TOOL_FINAL_ANSWER_SCORE_THRESHOLD) return i;
-  }
-  return null;
-};
-
 const toTitleCase = (apiName: string): string => {
   return apiName
     .replaceAll(/([A-Z])/g, ' $1')
@@ -96,6 +38,16 @@ const toTitleCase = (apiName: string): string => {
 };
 
 export const getToolDisplayName = (apiName: string): string => {
+  const linearLabel = formatLinearMcpShortLabel(apiName);
+  if (linearLabel) return linearLabel;
+
+  // MCP wire names title-case into gibberish ("Mcp  lobe cc  browser navigate"),
+  // so the browser tools resolve to their own labels before the fallback.
+  const browserLabel = formatBrowserMcpShortLabel(apiName, (key, defaultValue) =>
+    t(key, { defaultValue, ns: 'chat' }),
+  );
+  if (browserLabel) return browserLabel;
+
   const defaultValue = toTitleCase(apiName);
   const key = TOOL_API_DISPLAY_NAMES[apiName];
   if (!key) return defaultValue;
@@ -124,6 +76,23 @@ export const getToolSummaryText = (tools: ChatToolPayloadWithResult[]): string =
 
 export const hasToolError = (tools: ChatToolPayloadWithResult[]): boolean => {
   return tools.some((t) => t.result?.error);
+};
+
+export const getWorkflowCompletionStatus = (
+  tools: ChatToolPayloadWithResult[],
+): 'success' | 'partial' | 'error' => {
+  const collapsible = tools.filter((t) => t.intervention?.status !== 'pending');
+  if (collapsible.length === 0) return 'success';
+
+  const completed = collapsible.filter(
+    (t) => t.result != null && t.result.content !== LOADING_FLAT,
+  );
+  if (completed.length === 0) return 'success';
+
+  const errorCount = completed.filter((t) => t.result?.error).length;
+  if (errorCount === 0) return 'success';
+  if (errorCount === completed.length) return 'error';
+  return 'partial';
 };
 
 export const getToolFirstDetail = (tool: ChatToolPayloadWithResult): string => {
@@ -361,6 +330,8 @@ export const formatReasoningDuration = (ms: number): string => {
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 };
 
+const WORKFLOW_SUMMARY_TOP_N = 3;
+
 export const getWorkflowSummaryText = (blocks: AssistantContentBlock[]): string => {
   const tools = blocks.flatMap((b) => b.tools ?? []);
 
@@ -372,16 +343,60 @@ export const getWorkflowSummaryText = (blocks: AssistantContentBlock[]): string 
     groups.set(tool.apiName, existing);
   }
 
-  const toolParts: string[] = [];
-  for (const [apiName, { count, errorCount }] of groups) {
-    let part = getToolDisplayName(apiName);
-    if (count > 1) part += ` (${count})`;
-    if (errorCount > 0)
-      part += ` ${t('workflow.failedSuffix', { defaultValue: '(failed)', ns: 'chat' })}`;
-    toolParts.push(part);
+  const entries = [...groups.entries()];
+  const totalKinds = entries.length;
+  const totalCalls = entries.reduce((sum, [, { count }]) => sum + count, 0);
+  const totalErrors = entries.reduce((sum, [, { errorCount }]) => sum + errorCount, 0);
+
+  const formatToolPart = ([apiName, info]: [string, { count: number }]): string => {
+    const name = getToolDisplayName(apiName);
+    return info.count > 1 ? `${name} (${info.count})` : name;
+  };
+
+  // List all kinds when few; truncate to top N (by call count) when many.
+  // "+1 more" reads awkwardly, so we only collapse when there are ≥2 extra kinds beyond top N.
+  const displayedEntries =
+    totalKinds <= WORKFLOW_SUMMARY_TOP_N + 1
+      ? entries
+      : [...entries].sort(([, a], [, b]) => b.count - a.count).slice(0, WORKFLOW_SUMMARY_TOP_N);
+
+  // The tool list, e.g. "Task Create (5), Edit (4), Read (2)".
+  let toolsText = displayedEntries.map(formatToolPart).join(', ');
+
+  // Append "across N tools" when the list is truncated — otherwise it duplicates the visible list.
+  if (displayedEntries.length < totalKinds) {
+    toolsText += ` ${t('workflow.summaryAcrossTools', {
+      count: totalKinds,
+      defaultValue: 'across {{count}} tools',
+      ns: 'chat',
+    })}`;
   }
 
-  let result = toolParts.join(', ');
+  // Lead with the total call count when a tool was called more than once — it's the most
+  // useful signal, so it goes first ("15 calls: …"). When totalCalls equals totalKinds the
+  // count is redundant with the list, so we just show the list.
+  const segments: string[] =
+    totalKinds > 1 && totalCalls > totalKinds
+      ? [
+          t('workflow.summaryCallsLead', {
+            count: totalCalls,
+            defaultValue: '{{count}} calls: {{tools}}',
+            ns: 'chat',
+            tools: toolsText,
+          }),
+        ]
+      : [toolsText];
+
+  if (totalErrors > 0) {
+    segments.push(
+      t('workflow.summaryFailed', {
+        count: totalErrors,
+        defaultValue: '{{count}} failed',
+        ns: 'chat',
+      }),
+    );
+  }
+  let result = segments.join(' · ');
 
   const totalReasoningMs = blocks.reduce((sum, b) => sum + (b.reasoning?.duration ?? 0), 0);
   if (totalReasoningMs > 0) {

@@ -3,6 +3,7 @@ import { Lobe302AI } from './providers/ai302';
 import { LobeAi360AI } from './providers/ai360';
 import { LobeAiHubMixAI } from './providers/aihubmix';
 import { LobeAkashChatAI } from './providers/akashchat';
+import { LobeAntGroupAI } from './providers/antgroup';
 import { LobeAnthropicAI } from './providers/anthropic';
 import { LobeAzureAI } from './providers/azureai';
 import { LobeAzureOpenAI } from './providers/azureOpenai';
@@ -11,6 +12,7 @@ import { LobeBailianCodingPlanAI } from './providers/bailianCodingPlan';
 import { LobeBedrockAI } from './providers/bedrock';
 import { LobeBflAI } from './providers/bfl';
 import { LobeCerebrasAI } from './providers/cerebras';
+import { LobeChatGPTAI } from './providers/chatGPT';
 import { LobeCloudflareAI } from './providers/cloudflare';
 import { LobeCohereAI } from './providers/cohere';
 import { LobeCometAPIAI } from './providers/cometapi';
@@ -46,6 +48,8 @@ import { LobeNvidiaAI } from './providers/nvidia';
 import { LobeOllamaAI } from './providers/ollama';
 import { LobeOllamaCloudAI } from './providers/ollamacloud';
 import { LobeOpenAI } from './providers/openai';
+import { LobeOpenCodeCodingPlanAI } from './providers/opencodeCodingPlan';
+import { LobeOpenCodeZenAI } from './providers/opencodeZen';
 import { LobeOpenRouterAI } from './providers/openrouter';
 import { LobePerplexityAI } from './providers/perplexity';
 import { LobePPIOAI } from './providers/ppio';
@@ -60,6 +64,7 @@ import { LobeSparkAI } from './providers/spark';
 import { LobeStepfunAI } from './providers/stepfun';
 import { LobeStraicoAI } from './providers/straico';
 import { LobeStreamLakeAI } from './providers/streamlake';
+import { LobeSuperGrokAI } from './providers/superGrok';
 import { LobeTaichuAI } from './providers/taichu';
 import { LobeTencentCloudAI } from './providers/tencentcloud';
 import { LobeTogetherAI } from './providers/togetherai';
@@ -83,6 +88,7 @@ export const providerRuntimeMap = {
   ai360: LobeAi360AI,
   aihubmix: LobeAiHubMixAI,
   akashchat: LobeAkashChatAI,
+  antgroup: LobeAntGroupAI,
   anthropic: LobeAnthropicAI,
   bailiancodingplan: LobeBailianCodingPlanAI,
   azure: LobeAzureOpenAI,
@@ -91,6 +97,7 @@ export const providerRuntimeMap = {
   bedrock: LobeBedrockAI,
   bfl: LobeBflAI,
   cerebras: LobeCerebrasAI,
+  chatgpt: LobeChatGPTAI,
   cloudflare: LobeCloudflareAI,
   cohere: LobeCohereAI,
   cometapi: LobeCometAPIAI,
@@ -125,6 +132,8 @@ export const providerRuntimeMap = {
   nvidia: LobeNvidiaAI,
   ollama: LobeOllamaAI,
   ollamacloud: LobeOllamaCloudAI,
+  opencodecodingplan: LobeOpenCodeCodingPlanAI,
+  opencodezen: LobeOpenCodeZenAI,
   openai: LobeOpenAI,
   openrouter: LobeOpenRouterAI,
   perplexity: LobePerplexityAI,
@@ -141,6 +150,7 @@ export const providerRuntimeMap = {
   stepfun: LobeStepfunAI,
   straico: LobeStraicoAI,
   streamlake: LobeStreamLakeAI,
+  supergrok: LobeSuperGrokAI,
   taichu: LobeTaichuAI,
   tencentcloud: LobeTencentCloudAI,
   togetherai: LobeTogetherAI,

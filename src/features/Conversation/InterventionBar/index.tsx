@@ -12,6 +12,7 @@ interface InterventionBarProps {
 
 const InterventionBar = memo<InterventionBarProps>(({ interventions }) => {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [actionsPortalTarget, setActionsPortalTarget] = useState<HTMLDivElement | null>(null);
 
   // Derive the active index from the stored toolCallId.
   // Falls back to the first intervention when the previously active one is resolved.
@@ -34,7 +35,13 @@ const InterventionBar = memo<InterventionBarProps>(({ interventions }) => {
   if (!activeIntervention) return null;
 
   return (
-    <ChatInput className={styles.container} maxHeight={'50vh' as any} resize={false}>
+    <ChatInput
+      data-pending-hotkey-scope
+      className={styles.container}
+      footer={<div className={styles.actions} ref={setActionsPortalTarget} />}
+      maxHeight={'50vh' as any}
+      resize={false}
+    >
       {interventions.length > 1 && (
         <InterventionTabBar
           activeIndex={activeIndex}
@@ -42,7 +49,11 @@ const InterventionBar = memo<InterventionBarProps>(({ interventions }) => {
           onTabChange={handleTabChange}
         />
       )}
-      <InterventionContent intervention={activeIntervention} key={activeIntervention.toolCallId} />
+      <InterventionContent
+        actionsPortalTarget={actionsPortalTarget}
+        intervention={activeIntervention}
+        key={activeIntervention.toolCallId}
+      />
     </ChatInput>
   );
 });

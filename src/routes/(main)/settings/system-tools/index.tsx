@@ -6,6 +6,7 @@ import { userGeneralSettingsSelectors } from '@/store/user/slices/settings/selec
 
 import AppEnvironmentSection from './features/AppEnvironmentSection';
 import CliTestSection from './features/CliTestSection';
+import ShellSection from './features/ShellSection';
 import ToolDetectorSection from './features/ToolDetectorSection';
 
 const Page = () => {
@@ -15,8 +16,9 @@ const Page = () => {
   return (
     <>
       <SettingHeader title={t('tab.systemTools')} />
-      <AppEnvironmentSection />
+      <ShellSection />
       <ToolDetectorSection />
+      <AppEnvironmentSection />
       {isDevMode ? <CliTestSection /> : null}
     </>
   );

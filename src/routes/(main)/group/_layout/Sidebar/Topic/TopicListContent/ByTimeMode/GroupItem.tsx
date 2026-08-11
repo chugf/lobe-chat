@@ -42,8 +42,10 @@ const GroupItem = memo<GroupItemProps>(({ group, activeTopicId, activeThreadId }
             fav={topic.favorite}
             id={topic.id}
             key={topic.id}
+            status={topic.status}
             threadId={activeThreadId}
             title={topic.title}
+            userId={topic.userId}
           />
         ))}
       </Flexbox>

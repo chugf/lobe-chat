@@ -21,7 +21,7 @@ export const sendMessage = (
 ) => {
   return async (params: SendMessageParams) => {
     const state = get();
-    const { context, hooks, displayMessages } = state;
+    const { context, editor, hooks, displayMessages } = state;
 
     // ===== Hook: onBeforeSendMessage =====
     if (hooks.onBeforeSendMessage) {
@@ -45,10 +45,16 @@ export const sendMessage = (
 
     // Forward to ChatStore.sendMessage with context and messages
     // Pass displayMessages to decouple sendMessage from store selectors
+    // `onTopicCreated` is invoked from inside ChatStore.sendMessage as soon as
+    // the backend reports a new topic id (only under isolatedTopic contexts),
+    // not here after the full streaming lifecycle — otherwise the isolated
+    // UI would not see the AI response while it is still streaming.
     const result = await chatStore.sendMessage({
       ...params,
       context,
+      inputEditor: editor,
       messages,
+      onTopicCreated: hooks.onTopicCreated,
     });
 
     // ===== Hook: onAfterMessageCreate =====
